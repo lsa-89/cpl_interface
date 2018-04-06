@@ -25,25 +25,22 @@ bool query(json_prolog_msgs::PrologQuery::Request &req,
     if (queries.count(req.id) > 0) {
         res.ok = false;
         res.message = "Another query is already being processed with id" + req.id;
-    }
-    else {
+    } else {
         // build a query from the requirements
         PrologQuery query;
         query.set_values(req.mode, req.id, req.query, NULL, NULL);
 
+        typedef std::unordered_map<std::string, PrologQuery>::iterator UOMIterator;
+        std::pair<UOMIterator, bool> insertionPair;
+
         std::unique_lock <std::mutex> locker(hartmut);
-        // synchronized push of the query to the shared map of queries
         hartmut.lock();
-        queries[req.id] = query;
+        insertionPair = queries.insert({req.id, query}); // synchronized push of the query to the shared map of queries
         hartmut.unlock();
         cv.wait(locker); // let this thread sleep until it is notified that the query has been processed
 
-        std::unordered_map<std::string, PrologQuery>::iterator iterator; // iterator for queries
-        iterator = queries.find(req.id); // find the query with the given id
-
-        if (iterator != queries.end()) {
-            query = iterator->second;
-        }
+        // set the query from the insertion iterator, so we don't need to do a lookup in the map
+        query = insertionPair.first->second;
 
         res.ok = query.get_ok();
         res.message = query.get_message();
