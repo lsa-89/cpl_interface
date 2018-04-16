@@ -17,6 +17,7 @@
 std::unordered_map <std::string, PrologQuery> queries; // shared set of queries
 std::mutex hartmut; // mutex for synchronization of accesses to queries
 std::condition_variable cv;
+std::condition_variable cv_work;
 
 bool query(json_prolog_msgs::PrologQuery::Request &req,
            json_prolog_msgs::PrologQuery::Response &res) {
@@ -33,10 +34,13 @@ bool query(json_prolog_msgs::PrologQuery::Request &req,
         typedef std::unordered_map<std::string, PrologQuery>::iterator UOMIterator;
         std::pair<UOMIterator, bool> insertionPair;
 
-        std::unique_lock <std::mutex> locker(hartmut);
+
+        std::unique_lock<std::mutex> locker(hartmut);
         hartmut.lock();
         insertionPair = queries.insert({req.id, query}); // synchronized push of the query to the shared map of queries
         hartmut.unlock();
+        cv_work.notify_all();
+        ROS_INFO(insertionPair.first->second.get_query().c_str());
         cv.wait(locker); // let this thread sleep until it is notified that the query has been processed
 
         // set the query from the insertion iterator, so we don't need to do a lookup in the map
@@ -65,19 +69,27 @@ bool next_solution(json_prolog_msgs::PrologNextSolution::Request &req,
     return true;
 }
 
-void make_threaded_call(const char *input) {
+void pl_threaded_call(const std::string input) {
 
+//    std::string query_string = input + ", Id, []";
 
-    PlTerm argv(input);
+    PlTerm argv(input.c_str());
     try {
         PlQuery q("cpl_proof_of_concept", argv);
-//        while (q.next_solution()) {
-//            //generate all solutions
-//        }
     }
     catch (PlException &ex) {
         ROS_INFO("Prolog test call went wrong. You're not there yet, pal.");
     }
+
+//    PREDICATE(list_modules, 0)
+//    { PlTermv av(1);
+//
+//        PlQuery q("current_module", av);
+//        while( q.next_solution() )
+//            cout << (char *)av[0] << endl;
+//
+//        return TRUE;
+//    }
 }
 
 //void testWithoutThreading() {
@@ -94,7 +106,7 @@ void testWithThreading() {
 //        threads.push_back(std::thread( makeDummyCall, "something") );
 //        //t.detach();
 //    }
-    std::thread first(make_threaded_call, "String");
+    std::thread first(pl_threaded_call, "String");
     first.join();
 //    for (std::thread & t : threads) {
 //        t.join();
@@ -114,7 +126,7 @@ void PrologInterface::init() {
     }
 }
 
-PrologInterface::PrologInterface(bool json_prolog) {
+PrologInterface::PrologInterface() {
 
     ROS_INFO("Invoking prolog engine");
     char *argv[4];
@@ -130,13 +142,32 @@ PrologInterface::PrologInterface(bool json_prolog) {
     init();
 
 
-//    std::cout << "Test" << std::endl;
-    //std::thread one(make_threaded_call , "rdf_has(S,P,O)");
+//    std::mutex mtx;
+//    std::unique_lock<std::mutex> locker(hartmut);
+//    cv_work.wait(locker);
+    // queries available?
+    while(!queries.empty()){
+        ROS_INFO("I GOT HERE *****");
+        std::string myString(queries.begin()->second.get_query());
+//        ROS_INFO(myString);
+        // take first query from list, get value (the query) and get the query string
+        pl_threaded_call(myString);
+
+
+        //pose the query to prolog
+
+    }
+
+    // wait until work arrives
+
+
+
+    //std::thread one(pl_threaded_call , "rdf_has(S,P,O)");
     //one.join();
     //testWithoutThreading();
 
     // while loop to wake up processed queries
-    cv.notify_one();
+//    cv.notify_one();
 }
 
 void doSequence() {
@@ -211,9 +242,9 @@ int main(int argc, char **argv) {
     ros::init(argc, argv, "cpl_interface_node");
     ros::NodeHandle n;
 
-    //
+    // create the thread handler, that checks for queries and passes them to prolog
+    std::thread handler(PrologInterface);
 
-    //PrologInterface prologInterface = new PrologInterface();
     ros::ServiceServer service_query = n.advertiseService("query", query);
     ros::ServiceServer service_next_solution = n.advertiseService("next_solution", next_solution);
     ros::ServiceServer service_finish = n.advertiseService("finish", finish);

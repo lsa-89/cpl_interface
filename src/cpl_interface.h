@@ -15,11 +15,11 @@ class PrologInterface {
     typedef std::shared_ptr <PlEngine> PlEnginePtr;
     PlEnginePtr engine;
     //PlEngine* engine;
-    bool useJsonProlog;
-    int useThreading;
+//    bool useJsonProlog;
+//    int useThreading;
 
 public:
-    PrologInterface(bool json_prolog = false);
+    PrologInterface();
 
     ~PrologInterface() {
     }
@@ -42,7 +42,11 @@ public:
                     const std::string &p_query,
                     const std::string &p_message, bool p_ok);
 
-    const std::string &get_message() { return message; }
+    std::string &get_query() { return query;}
+
+    std::string &get_id() {return id;}
+
+    std::string &get_message() { return message; }
 
     bool get_ok() { return ok; }
 
