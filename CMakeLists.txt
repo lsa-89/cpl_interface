@@ -132,6 +132,7 @@ find_package(PkgConfig)
 pkg_check_modules(SWIPL REQUIRED swipl)
 message(STATUS "SWIPL found.")
 
+set(CMAKE_CXX_FLAGS "-std=c++0x -pthread ${CMAKE_CXX_FLAGS}")
 
 include_directories(include ${SWIPL_INCLUDE_DIRS} ${catkin_INCLUDE_DIRS})
 add_executable(cpl_interface_node src/cpl_interface.cpp)

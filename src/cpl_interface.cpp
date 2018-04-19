@@ -16,6 +16,7 @@
 // unordered_map: no ordering, O(1) for insert/access
 std::unordered_map <std::string, PrologQuery> queries; // shared set of queries
 std::mutex hartmut; // mutex for synchronization of accesses to queries
+std::condition_variable cv_loop;
 std::condition_variable cv;
 std::condition_variable cv_work;
 
@@ -126,7 +127,29 @@ void PrologInterface::init() {
     }
 }
 
-PrologInterface::PrologInterface() {
+void PrologInterface::loop() {
+    while(1){
+        {
+            std::unique_lock<std::mutex> lk(loop_lock);
+            // queries available?
+            while(!queries.empty()) {
+                ROS_INFO("I GOT HERE *****");
+                std::string query_string(queries.begin()->second.get_query());
+
+                // take first query from list, get value (the query) and get the query string
+                pl_threaded_call(query_string);
+            }
+            cv_loop.wait(lk, [this]{ return has_queries_to_process; });
+            has_queries_to_process = false;
+
+
+            }
+
+        }
+    }
+
+PrologInterface::PrologInterface() :
+    thread(&PrologInterface::loop, this){
 
     ROS_INFO("Invoking prolog engine");
     char *argv[4];
@@ -140,34 +163,6 @@ PrologInterface::PrologInterface() {
     argv[argc] = NULL;
     engine = std::make_shared<PlEngine>(argc, argv);
     init();
-
-
-//    std::mutex mtx;
-//    std::unique_lock<std::mutex> locker(hartmut);
-//    cv_work.wait(locker);
-    // queries available?
-    while(!queries.empty()){
-        ROS_INFO("I GOT HERE *****");
-        std::string myString(queries.begin()->second.get_query());
-//        ROS_INFO(myString);
-        // take first query from list, get value (the query) and get the query string
-        pl_threaded_call(myString);
-
-
-        //pose the query to prolog
-
-    }
-
-    // wait until work arrives
-
-
-
-    //std::thread one(pl_threaded_call , "rdf_has(S,P,O)");
-    //one.join();
-    //testWithoutThreading();
-
-    // while loop to wake up processed queries
-//    cv.notify_one();
 }
 
 void doSequence() {
@@ -243,7 +238,8 @@ int main(int argc, char **argv) {
     ros::NodeHandle n;
 
     // create the thread handler, that checks for queries and passes them to prolog
-    std::thread handler(PrologInterface);
+    PrologInterface prologInterface;
+//    std::thread handler(PrologInterface);
 
     ros::ServiceServer service_query = n.advertiseService("query", query);
     ros::ServiceServer service_next_solution = n.advertiseService("next_solution", next_solution);

@@ -9,14 +9,20 @@
 #include <memory>
 #include <iostream>
 #include <unordered_map>
+#include <thread>
+#include <mutex>
+#include <condition_variable>
 
 //wrapper class for Prolog Engine based on SWI-C++
 class PrologInterface {
+private:
     typedef std::shared_ptr <PlEngine> PlEnginePtr;
     PlEnginePtr engine;
-    //PlEngine* engine;
-//    bool useJsonProlog;
-//    int useThreading;
+    std::mutex loop_lock;
+    std::condition_variable cv_loop;
+    std::thread thread;
+    bool has_queries_to_process = false;
+
 
 public:
     PrologInterface();
@@ -28,6 +34,11 @@ public:
      * initialize the necessary knowrob packages
      */
     void init();
+
+    /*
+     * main loop to process queries
+     */
+    void loop();
 
 };
 
