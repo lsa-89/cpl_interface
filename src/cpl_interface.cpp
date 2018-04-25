@@ -15,10 +15,15 @@
 // map: considers ordering, O(log n) for insert/access
 // unordered_map: no ordering, O(1) for insert/access
 std::unordered_map <std::string, PrologQuery> queries; // shared set of queries
-std::mutex hartmut; // mutex for synchronization of accesses to queries
+
 std::condition_variable cv_loop;
-std::condition_variable cv;
-std::condition_variable cv_work;
+std::condition_variable cv_work; // not necessary
+
+// shared mutex, used by query threads
+std::mutex push_lock;
+
+// global access to the prolog interface instance
+PrologInterface *plIfaceGlobal=NULL;
 
 bool query(json_prolog_msgs::PrologQuery::Request &req,
            json_prolog_msgs::PrologQuery::Response &res) {
@@ -29,26 +34,29 @@ bool query(json_prolog_msgs::PrologQuery::Request &req,
         res.message = "Another query is already being processed with id" + req.id;
     } else {
         // build a query from the requirements
-        PrologQuery query;
-        query.set_values(req.mode, req.id, req.query, NULL, NULL);
+        PrologQuery queryObj;
+        std::string query = req.query;
+        // set_values(mode, id, query, msg, ok)
+        queryObj.set_values(req.mode, req.id, query, "", true );
 
         typedef std::unordered_map<std::string, PrologQuery>::iterator UOMIterator;
         std::pair<UOMIterator, bool> insertionPair;
 
-
-        std::unique_lock<std::mutex> locker(hartmut);
-        hartmut.lock();
-        insertionPair = queries.insert({req.id, query}); // synchronized push of the query to the shared map of queries
-        hartmut.unlock();
-        cv_work.notify_all();
-        ROS_INFO(insertionPair.first->second.get_query().c_str());
-        cv.wait(locker); // let this thread sleep until it is notified that the query has been processed
+        push_lock.lock();
+        insertionPair = queries.insert({req.id, queryObj}); // synchronized push of the query to the shared map of queries
+        push_lock.unlock();
 
         // set the query from the insertion iterator, so we don't need to do a lookup in the map
-        query = insertionPair.first->second;
+        queryObj = insertionPair.first->second;
 
-        res.ok = query.get_ok();
-        res.message = query.get_message();
+        int mode = req.mode;
+        std::string id = req.id;
+        std::string query_string = req.query;
+
+        plIfaceGlobal->PrologInterface::push_query(mode, id, query_string);
+
+        res.ok = true; //query.get_ok();
+        res.message = ""; //query.get_message();
 
         return true;
     }
@@ -71,12 +79,13 @@ bool next_solution(json_prolog_msgs::PrologNextSolution::Request &req,
 }
 
 void pl_threaded_call(const std::string input) {
-
-//    std::string query_string = input + ", Id, []";
+    ROS_INFO(input.c_str());
+    std::string goal = input + ", Id, []"; // for "write(1) eg. thread_create(write(1), Id, [])
 
     PlTerm argv(input.c_str());
     try {
-        PlQuery q("cpl_proof_of_concept", argv);
+        //PlQuery q("cpl_proof_of_concept", argv);
+        PlCall ("thread_create", argv);
     }
     catch (PlException &ex) {
         ROS_INFO("Prolog test call went wrong. You're not there yet, pal.");
@@ -93,30 +102,16 @@ void pl_threaded_call(const std::string input) {
 //    }
 }
 
-//void testWithoutThreading() {
-//    for (int i = 0; i < 1000; ++i)
-//        makeDummyCall("hello");
-//}
+void PrologInterface::push_query(int mode, std::string id, std::string query){
 
-void testWithThreading() {
-
-    std::list <std::thread> threads;
-
-//    for (int i = 0; i < 1000; ++i) {
-//        //std::thread t(makeDummyCall, "doesntmatter");
-//        threads.push_back(std::thread( makeDummyCall, "something") );
-//        //t.detach();
-//    }
-    std::thread first(pl_threaded_call, "String");
-    first.join();
-//    for (std::thread & t : threads) {
-//        t.join();
-//    }
-
+    has_queries_to_process = true;
+    cv_loop.notify_one();
+    ROS_INFO("");
 }
 
+void PrologInterface::pop_query() {}
+
 void PrologInterface::init() {
-    //ROS_INFO("Initializing Prolog Engine");
 
     PlTerm av("knowrob_common");
     try {
@@ -133,7 +128,7 @@ void PrologInterface::loop() {
             std::unique_lock<std::mutex> lk(loop_lock);
             // queries available?
             while(!queries.empty()) {
-                ROS_INFO("I GOT HERE *****");
+                //ROS_INFO("I GOT HERE *****");
                 std::string query_string(queries.begin()->second.get_query());
 
                 // take first query from list, get value (the query) and get the query string
@@ -141,10 +136,7 @@ void PrologInterface::loop() {
             }
             cv_loop.wait(lk, [this]{ return has_queries_to_process; });
             has_queries_to_process = false;
-
-
             }
-
         }
     }
 
@@ -154,8 +146,8 @@ PrologInterface::PrologInterface() :
     ROS_INFO("Invoking prolog engine");
     char *argv[4];
     int argc = 0;
-    argv[argc++] = "PrologEngine";
-    argv[argc++] = "-f";
+    argv[argc++] = (char*)"PrologEngine"; // cast only to solve warnings from the compiler
+    argv[argc++] = (char*)"-f";
     std::string rosPrologInit = ros::package::getPath("rosprolog") + "/prolog/init.pl";
     argv[argc] = new char[rosPrologInit.size() + 1];
     std::copy(rosPrologInit.begin(), rosPrologInit.end(), argv[argc]);
@@ -163,65 +155,6 @@ PrologInterface::PrologInterface() :
     argv[argc] = NULL;
     engine = std::make_shared<PlEngine>(argc, argv);
     init();
-}
-
-void doSequence() {
-    struct timespec start, finish;
-    double elapsed;
-
-    clock_gettime(CLOCK_REALTIME, &start);
-    clock_gettime(CLOCK_REALTIME, &finish);
-
-    elapsed = (finish.tv_sec - start.tv_sec);
-    elapsed += (finish.tv_nsec - start.tv_nsec) / 1000000000.0;
-
-    std::cout << "Time elapsed: " + std::to_string(elapsed) << std::endl;
-}
-
-void doMultiThreading() {
-
-    struct timespec start, finish;
-    double elapsed;
-    std::list <std::thread> threads;
-
-    clock_gettime(CLOCK_REALTIME, &start);
-    for (int i = 0; i < 2; ++i) {
-        //threads.push_back(std::thread(  ) );
-    }
-    for (std::thread &t : threads) {
-        t.join();
-    }
-    clock_gettime(CLOCK_REALTIME, &finish);
-
-    elapsed = (finish.tv_sec - start.tv_sec);
-    elapsed += (finish.tv_nsec - start.tv_nsec) / 1000000000.0;
-
-    std::cout << "Time elapsed: " + std::to_string(elapsed) << std::endl;
-}
-
-void fun1(int input) {
-    int j = 0;
-
-    input += j;
-    std::cout << input << std::endl;
-}
-
-void fun2(int input) {
-    int j = 5;
-
-    input -= j;
-    std::cout << input << std::endl;
-}
-
-void threadingTest() {
-
-    std::list <std::thread> threads;
-
-    for (int i = 0; i < 200; ++i)
-        threads.push_back(std::thread(fun1, 234));
-
-    for (std::thread &t : threads)
-        t.join();
 }
 
 void PrologQuery::set_values(int p_mode, const std::string &p_id,
@@ -237,9 +170,10 @@ int main(int argc, char **argv) {
     ros::init(argc, argv, "cpl_interface_node");
     ros::NodeHandle n;
 
+    // TODO:REMOVE ROS_INFO("PASSED MAIN");
     // create the thread handler, that checks for queries and passes them to prolog
     PrologInterface prologInterface;
-//    std::thread handler(PrologInterface);
+    plIfaceGlobal = &prologInterface;
 
     ros::ServiceServer service_query = n.advertiseService("query", query);
     ros::ServiceServer service_next_solution = n.advertiseService("next_solution", next_solution);

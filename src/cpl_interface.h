@@ -40,6 +40,15 @@ public:
      */
     void loop();
 
+    /*
+     * push a query to the map of queries
+     */
+    void push_query(int mode, std::string id, std::string query);
+
+    /*
+     * pop a query from the map of queries
+     */
+    void pop_query();
 };
 
 class PrologQuery {
@@ -65,6 +74,6 @@ public:
     }
 };
 
-PrologInterface prologInterface;
+//PrologInterface prologInterface;
 
 #endif //JSONPROLOGINTERFACE_H
