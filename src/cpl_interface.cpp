@@ -33,21 +33,7 @@ bool query(json_prolog_msgs::PrologQuery::Request &req,
         res.ok = false;
         res.message = "Another query is already being processed with id" + req.id;
     } else {
-        // build a query from the requirements
-        PrologQuery queryObj;
-        std::string query = req.query;
-        // set_values(mode, id, query, msg, ok)
-        queryObj.set_values(req.mode, req.id, query, "", true );
 
-        typedef std::unordered_map<std::string, PrologQuery>::iterator UOMIterator;
-        std::pair<UOMIterator, bool> insertionPair;
-
-        push_lock.lock();
-        insertionPair = queries.insert({req.id, queryObj}); // synchronized push of the query to the shared map of queries
-        push_lock.unlock();
-
-        // set the query from the insertion iterator, so we don't need to do a lookup in the map
-        queryObj = insertionPair.first->second;
 
         int mode = req.mode;
         std::string id = req.id;
@@ -104,9 +90,28 @@ void pl_threaded_call(const std::string input) {
 
 void PrologInterface::push_query(int mode, std::string id, std::string query){
 
+    // build a query from the requirements
+    PrologQuery queryObj;
+    std::string query_string = query;
+    // set_values(mode, id, query, msg, ok)
+    queryObj.set_values(mode, id, query_string, "", true );
+
+    typedef std::unordered_map<std::string, PrologQuery>::iterator UOMIterator;
+    std::pair<UOMIterator, bool> insertionPair;
+
+    push_lock.lock();
+    insertionPair = queries.insert({id, queryObj}); // synchronized push of the query to the shared map of queries
+    push_lock.unlock();
+
+    /*
+     * Can probably be romoved
+     */
+//    // set the query from the insertion iterator, so we don't need to do a lookup in the map
+//    queryObj = insertionPair.first->second;
+
     has_queries_to_process = true;
     cv_loop.notify_one();
-    ROS_INFO("");
+    ROS_INFO("PUSH QUERY PASSED");
 }
 
 void PrologInterface::pop_query() {}
