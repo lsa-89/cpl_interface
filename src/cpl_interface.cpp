@@ -65,16 +65,18 @@ bool next_solution(json_prolog_msgs::PrologNextSolution::Request &req,
 }
 
 void pl_threaded_call(const std::string input) {
-    ROS_INFO(input.c_str());
+    std::string debug_msg = "Input::: " + input;
+    ROS_INFO(debug_msg.c_str());
     std::string goal = input + ", Id, []"; // for "write(1) eg. thread_create(write(1), Id, [])
 
-    PlTerm argv(input.c_str());
+    ROS_INFO(goal.c_str());
+    PlTerm argv(goal.c_str());
     try {
         //PlQuery q("cpl_proof_of_concept", argv);
         PlCall ("thread_create", argv);
     }
     catch (PlException &ex) {
-        ROS_INFO("Prolog test call went wrong. You're not there yet, pal.");
+        ROS_INFO("Prolog test call went wrong.");
     }
 
 //    PREDICATE(list_modules, 0)
@@ -128,18 +130,26 @@ void PrologInterface::init() {
 }
 
 void PrologInterface::loop() {
+    int counter = 0;
+    std::string debug_msg = "";
     while(1){
         {
             std::unique_lock<std::mutex> lk(loop_lock);
             // queries available?
             while(!queries.empty()) {
-                //ROS_INFO("I GOT HERE *****");
+                counter++;
+                debug_msg = "ENTER WHILE LOOP: " + std::to_string(counter);
+                ROS_INFO(debug_msg.c_str());
+
                 std::string query_string(queries.begin()->second.get_query());
 
                 // take first query from list, get value (the query) and get the query string
                 pl_threaded_call(query_string);
+
             }
+            ROS_INFO("WAIT FOR QUERIES...");
             cv_loop.wait(lk, [this]{ return has_queries_to_process; });
+            ROS_INFO("WAKE UP - QUERIES AVAILABLE.");
             has_queries_to_process = false;
             }
         }
