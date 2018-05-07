@@ -15,9 +15,9 @@
 // map: considers ordering, O(log n) for insert/access
 // unordered_map: no ordering, O(1) for insert/access
 std::unordered_map <std::string, PrologQuery> queries; // shared set of queries
+std::unordered_map <std::string, PrologQuery> processed_queries;
 
 std::condition_variable cv_loop;
-std::condition_variable cv_work; // not necessary
 
 // shared mutex, used by query threads
 std::mutex push_lock;
@@ -64,30 +64,30 @@ bool next_solution(json_prolog_msgs::PrologNextSolution::Request &req,
     return true;
 }
 
-void pl_threaded_call(const std::string input) {
-    std::string debug_msg = "Input::: " + input;
-    ROS_INFO(debug_msg.c_str());
-    std::string goal = input + ", Id, []"; // for "write(1) eg. thread_create(write(1), Id, [])
+void pl_threaded_call(std::shared_ptr <PlEngine> engine, std::string input) {
 
-    ROS_INFO(goal.c_str());
-    PlTerm argv(goal.c_str());
+    /*
+     * Builds up the query for prolog. The following example should form
+     * a prolog query of the form
+     *
+     * call(thread_create, write(1), Id, []).
+     */
+
+    PlTerm out; // Diese Zeile wirft seg fault wird aber im example auch so verwendet
+    PlTail l(out[0]);
+    l.append("thread_create");
+    l.append(input.c_str());
+    l.append("Id");
+    l.append("[]");
+    l.close();
+    
     try {
-        //PlQuery q("cpl_proof_of_concept", argv);
-        PlCall ("thread_create", argv);
+        PlQuery q("call", out);
+//        PlCall ("cpl_proof_of_concept", argv);
     }
     catch (PlException &ex) {
-        ROS_INFO("Prolog test call went wrong.");
+        ROS_INFO((char *) ex);
     }
-
-//    PREDICATE(list_modules, 0)
-//    { PlTermv av(1);
-//
-//        PlQuery q("current_module", av);
-//        while( q.next_solution() )
-//            cout << (char *)av[0] << endl;
-//
-//        return TRUE;
-//    }
 }
 
 void PrologInterface::push_query(int mode, std::string id, std::string query){
@@ -98,18 +98,9 @@ void PrologInterface::push_query(int mode, std::string id, std::string query){
     // set_values(mode, id, query, msg, ok)
     queryObj.set_values(mode, id, query_string, "", true );
 
-    typedef std::unordered_map<std::string, PrologQuery>::iterator UOMIterator;
-    std::pair<UOMIterator, bool> insertionPair;
-
     push_lock.lock();
-    insertionPair = queries.insert({id, queryObj}); // synchronized push of the query to the shared map of queries
+    queries.insert({id, queryObj}); // synchronized push of the query to the shared map of queries
     push_lock.unlock();
-
-    /*
-     * Can probably be romoved
-     */
-//    // set the query from the insertion iterator, so we don't need to do a lookup in the map
-//    queryObj = insertionPair.first->second;
 
     has_queries_to_process = true;
     cv_loop.notify_one();
@@ -130,6 +121,8 @@ void PrologInterface::init() {
 }
 
 void PrologInterface::loop() {
+
+    typedef std::unordered_map<std::string, PrologQuery>::iterator UOMIterator;
     int counter = 0;
     std::string debug_msg = "";
     while(1){
@@ -139,12 +132,18 @@ void PrologInterface::loop() {
             while(!queries.empty()) {
                 counter++;
                 debug_msg = "ENTER WHILE LOOP: " + std::to_string(counter);
-                ROS_INFO(debug_msg.c_str());
 
-                std::string query_string(queries.begin()->second.get_query());
+                UOMIterator iterator = queries.begin();
+                std::string query_string(iterator->second.get_query());
 
                 // take first query from list, get value (the query) and get the query string
-                pl_threaded_call(query_string);
+                pl_threaded_call(engine, query_string);
+
+
+                push_lock.lock();
+                processed_queries.insert({iterator->first, iterator->second}); // synchronized push of the query to the shared map of processed queries
+                queries.erase(iterator); // remove query from the queued queries
+                push_lock.unlock();
 
             }
             ROS_INFO("WAIT FOR QUERIES...");
@@ -185,7 +184,6 @@ int main(int argc, char **argv) {
     ros::init(argc, argv, "cpl_interface_node");
     ros::NodeHandle n;
 
-    // TODO:REMOVE ROS_INFO("PASSED MAIN");
     // create the thread handler, that checks for queries and passes them to prolog
     PrologInterface prologInterface;
     plIfaceGlobal = &prologInterface;
