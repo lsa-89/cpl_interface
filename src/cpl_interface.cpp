@@ -73,7 +73,7 @@ void pl_threaded_call(std::shared_ptr <PlEngine> engine, std::string input) {
      * call(thread_create, write(1), Id, []).
      */
 
-    PlTermv out(4); //
+    PlTermv out(4); // SWI-Prolog [thread -1]: received fatal signal 11 (segv). No backtrace named crash. terminate called without an active exception
     out[0] = "thread_create";
     out[1] = input.c_str();
     out[2] = "Id";
