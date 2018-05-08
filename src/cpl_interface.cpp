@@ -17,7 +17,7 @@
 std::unordered_map <std::string, PrologQuery> queries; // shared set of queries
 std::unordered_map <std::string, PrologQuery> processed_queries;
 
-std::condition_variable cv_loop;
+//std::condition_variable cv_loop;
 
 // shared mutex, used by query threads
 std::mutex push_lock;
@@ -70,17 +70,17 @@ void pl_threaded_call(std::shared_ptr <PlEngine> engine, std::string input) {
      * Builds up the query for prolog. The following example should form
      * a prolog query of the form
      *
-     * call(thread_create, write(1), Id, []).
+     * call(thread_create, input, Id, []).
      */
 
-    PlTerm out; // Diese Zeile wirft seg fault wird aber im example auch so verwendet
+    PlTerm out; // this lines causes an ERROR: SWI-Prolog [thread -1]: received fatal signal 11 (segv)
     PlTail l(out[0]);
     l.append("thread_create");
     l.append(input.c_str());
     l.append("Id");
     l.append("[]");
     l.close();
-    
+
     try {
         PlQuery q("call", out);
 //        PlCall ("cpl_proof_of_concept", argv);
@@ -118,11 +118,24 @@ void PrologInterface::init() {
     catch (PlException &ex) {
         ROS_INFO((char *) ex);
     }
+
+//    PlTermv out(4); // Diese Zeile wirft seg fault wird aber im example auch so verwendet
+//    out[0] = "thread_create";
+//    out[1] = "write(1)";
+//    out[2] = "Id";
+//    out[3] = "[]";
+//
+//    try {
+//        PlQuery q("call", out);
+//    }
+//    catch (PlException &ex) {
+//        ROS_INFO((char *) ex);
+//    }
 }
 
 void PrologInterface::loop() {
 
-    typedef std::unordered_map<std::string, PrologQuery>::iterator UOMIterator;
+    std::unordered_map<std::string, PrologQuery>::iterator iterator;
     int counter = 0;
     std::string debug_msg = "";
     while(1){
@@ -133,12 +146,12 @@ void PrologInterface::loop() {
                 counter++;
                 debug_msg = "ENTER WHILE LOOP: " + std::to_string(counter);
 
-                UOMIterator iterator = queries.begin();
+                iterator = queries.begin();
                 std::string query_string(iterator->second.get_query());
 
+                ROS_INFO(query_string.c_str());
                 // take first query from list, get value (the query) and get the query string
                 pl_threaded_call(engine, query_string);
-
 
                 push_lock.lock();
                 processed_queries.insert({iterator->first, iterator->second}); // synchronized push of the query to the shared map of processed queries
@@ -167,6 +180,7 @@ PrologInterface::PrologInterface() :
     std::copy(rosPrologInit.begin(), rosPrologInit.end(), argv[argc]);
     argv[argc++][rosPrologInit.size()] = '\0';
     argv[argc] = NULL;
+
     engine = std::make_shared<PlEngine>(argc, argv);
     init();
 }
