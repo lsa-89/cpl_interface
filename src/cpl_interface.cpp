@@ -70,16 +70,14 @@ void pl_threaded_call(std::shared_ptr <PlEngine> engine, std::string input) {
      * Builds up the query for prolog. The following example should form
      * a prolog query of the form
      *
-     * call(thread_create, input, Id, []).
+     * call(thread_create, write(1), Id, []).
      */
 
-    PlTerm out; // this lines causes an ERROR: SWI-Prolog [thread -1]: received fatal signal 11 (segv)
-    PlTail l(out[0]);
-    l.append("thread_create");
-    l.append(input.c_str());
-    l.append("Id");
-    l.append("[]");
-    l.close();
+    PlTermv out(4); //
+    out[0] = "thread_create";
+    out[1] = input.c_str();
+    out[2] = "Id";
+    out[3] = "[]";
 
     try {
         PlQuery q("call", out);
@@ -152,6 +150,13 @@ void PrologInterface::loop() {
                 ROS_INFO(query_string.c_str());
                 // take first query from list, get value (the query) and get the query string
                 pl_threaded_call(engine, query_string);
+
+//                PlTail l(out[0]);
+//                l.append("thread_create");
+//                l.append(query_string.c_str());
+//                l.append("Id");
+//                l.append("[]");
+//                l.close();
 
                 push_lock.lock();
                 processed_queries.insert({iterator->first, iterator->second}); // synchronized push of the query to the shared map of processed queries
