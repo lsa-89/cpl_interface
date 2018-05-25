@@ -14,6 +14,30 @@
 #include <condition_variable>
 
 //wrapper class for Prolog Engine based on SWI-C++
+
+class PrologQuery {
+    int mode;
+    std::string id, query, message;
+    bool ok;
+
+
+public:
+    void set_values(int p_mode, const std::string &p_id,
+                    const std::string &p_query,
+                    const std::string &p_message, bool p_ok);
+
+    std::string &get_query() { return query;}
+
+    std::string &get_id() {return id;}
+
+    std::string &get_message() { return message; }
+
+    bool get_ok() { return ok; }
+
+    ~PrologQuery() {
+    }
+};
+
 class PrologInterface {
 private:
     typedef std::shared_ptr <PlEngine> PlEnginePtr;
@@ -48,32 +72,7 @@ public:
     /*
      * pop a query from the map of queries
      */
-    void pop_query();
+    PrologQuery pop_query(std::string);
 };
-
-class PrologQuery {
-    int mode;
-    std::string id, query, message;
-    bool ok;
-
-
-public:
-    void set_values(int p_mode, const std::string &p_id,
-                    const std::string &p_query,
-                    const std::string &p_message, bool p_ok);
-
-    std::string &get_query() { return query;}
-
-    std::string &get_id() {return id;}
-
-    std::string &get_message() { return message; }
-
-    bool get_ok() { return ok; }
-
-    ~PrologQuery() {
-    }
-};
-
-//PrologInterface prologInterface;
 
 #endif //JSONPROLOGINTERFACE_H
