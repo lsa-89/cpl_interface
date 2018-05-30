@@ -23,7 +23,7 @@ std::unordered_map <std::string, PrologQuery> processed_queries;
 std::mutex push_lock;
 
 // global access to the prolog interface instance
-PrologInterface *plIfaceGlobal=NULL;
+PrologInterface *plIfaceGlobal = NULL;
 
 bool query(json_prolog_msgs::PrologQuery::Request &req,
            json_prolog_msgs::PrologQuery::Response &res) {
@@ -77,7 +77,10 @@ bool next_solution(json_prolog_msgs::PrologNextSolution::Request &req,
     res.solution = "";
     return true;
 }
-
+/*
+ * Make a call to prolog that is started in a new prolog thread, using
+ * the threaded_query.pl interface
+ */
 void pl_threaded_call(std::shared_ptr <PlEngine> engine, std::string input) {
 
     /*
@@ -87,33 +90,62 @@ void pl_threaded_call(std::shared_ptr <PlEngine> engine, std::string input) {
      * call(thread_create, write(1), Id, []).
      */
 
-//    PlTermv out(4); // SWI-Prolog [thread -1]: received fatal signal 11 (segv). No backtrace named crash. terminate called without an active exception
-//    out[0] = "thread_create";
-//    out[1] = input.c_str();
-//    out[2] = "Id";
-//    out[3] = PlTerm();
-
-
     std::string query_string = input + ", Id";
+    std::string thread_id;
+
+    /*
+     * This is the prolog term that the prolog engine will try to unify.
+     * av[1] will yield the solution to the imposed query.
+     *
+     * The query that's being send to prolog, in this case, will look like this:
+     * queryt_create('<input>', Id).
+     */
+    PlFrame fr;
+    PlTermv av(2);
+    av[0] = PlCompound(query_string.c_str());
+//    av[1] = input.c_str();
+//    av[1] = "Id";
+//    av[3] = PlTerm();
 
     try {
-        PlQuery q("queryt_create", PlCompound(query_string.c_str()));
+        PlQuery q("queryt_create", av);
+//        PlQuery q("queryt_create", PlCompound(query_string.c_str()));
 //        PlQuery q("queryt_create", PlTermv(PlCompound(input.c_str())));
 //        q.next_solution();
 //        PlCall ("cpl_proof_of_concept", argv);
+
+        while (q.next_solution()) {
+            char* solution = av[1];
+            thread_id.assign(solution);
+//            std::cout << (char*) av[1] << std::endl;
+        }
+
+
     }
     catch (PlException &ex) {
         ROS_INFO((char *) ex);
     }
+    ROS_INFO(thread_id.c_str());
 }
 
-void PrologInterface::push_query(int mode, std::string id, std::string query){
+//    {
+//        PlFrame fr;
+//        PlTermv av(2);
+//        av[0] = PlCompound("john");
+//        PlQuery q("likes", av);
+//        while (q.next_solution())
+//        {
+//            cout << (char*)av[1] << endl;
+//        }
+//    }
+
+void PrologInterface::push_query(int mode, std::string id, std::string query) {
 
     // build a query from the requirements
     PrologQuery queryObj;
     std::string query_string = query;
     // set_values(mode, id, query, msg, ok)
-    queryObj.set_values(mode, id, query_string, "", true );
+    queryObj.set_values(mode, id, query_string, "", true);
 
     push_lock.lock();
     queries.insert({id, queryObj}); // synchronized push of the query to the shared map of queries
@@ -160,8 +192,8 @@ void PrologInterface::loop() {
     ROS_INFO("Invoking prolog engine");
     char *argv[4];
     int argc = 0;
-    argv[argc++] = (char*)"PrologEngine"; // cast only to solve warnings from the compiler
-    argv[argc++] = (char*)"-f";
+    argv[argc++] = (char *) "PrologEngine"; // cast only to solve warnings from the compiler
+    argv[argc++] = (char *) "-f";
     std::string rosPrologInit = ros::package::getPath("rosprolog") + "/prolog/init.pl";
     argv[argc] = new char[rosPrologInit.size() + 1];
     std::copy(rosPrologInit.begin(), rosPrologInit.end(), argv[argc]);
@@ -174,11 +206,11 @@ void PrologInterface::loop() {
     std::unordered_map<std::string, PrologQuery>::iterator iterator;
     int counter = 0;
     std::string debug_msg = "";
-    while(ros::ok()){
+    while (ros::ok()) {
         {
-            std::unique_lock<std::mutex> lk(loop_lock);
+            std::unique_lock <std::mutex> lk(loop_lock);
             // queries available?
-            while(!queries.empty()) {
+            while (!queries.empty()) {
                 counter++;
                 debug_msg = "ENTER WHILE LOOP: " + std::to_string(counter);
 
@@ -190,21 +222,22 @@ void PrologInterface::loop() {
                 pl_threaded_call(engine, query_string);
 
                 push_lock.lock();
-                processed_queries.insert({iterator->first, iterator->second}); // synchronized push of the query to the shared map of processed queries
+                processed_queries.insert({iterator->first,
+                                          iterator->second}); // synchronized push of the query to the shared map of processed queries
                 queries.erase(iterator); // remove query from the queued queries
                 push_lock.unlock();
 
             }
             ROS_INFO("WAIT FOR QUERIES...");
-            cv_loop.wait(lk, [this]{ return has_queries_to_process; });
+            cv_loop.wait(lk, [this] { return has_queries_to_process; });
             ROS_INFO("WAKE UP - QUERIES AVAILABLE.");
             has_queries_to_process = false;
-            }
         }
     }
+}
 
 PrologInterface::PrologInterface() :
-    thread(&PrologInterface::loop, this){
+        thread(&PrologInterface::loop, this) {
 }
 
 void PrologQuery::set_values(int p_mode, const std::string &p_id,
