@@ -77,11 +77,12 @@ bool next_solution(json_prolog_msgs::PrologNextSolution::Request &req,
     res.solution = "";
     return true;
 }
+
 /*
  * Make a call to prolog that is started in a new prolog thread, using
  * the threaded_query.pl interface
  */
-void pl_threaded_call(std::shared_ptr <PlEngine> engine, std::string input) {
+std::string pl_threaded_call(std::shared_ptr <PlEngine> engine, std::string input) {
 
     /*
      * Builds up the query for prolog. The following example should form
@@ -90,7 +91,7 @@ void pl_threaded_call(std::shared_ptr <PlEngine> engine, std::string input) {
      * call(thread_create, write(1), Id, []).
      */
 
-    std::string query_string = input + ", Id";
+    std::string query_string = input;// + ", Id";
     std::string thread_id;
 
     /*
@@ -102,42 +103,21 @@ void pl_threaded_call(std::shared_ptr <PlEngine> engine, std::string input) {
      */
     PlFrame fr;
     PlTermv av(2);
-    av[0] = PlCompound(query_string.c_str());
-//    av[1] = input.c_str();
+    av[0] = input.c_str(); //PlString(query_string.c_str());
 //    av[1] = "Id";
-//    av[3] = PlTerm();
+//    av[0] = PlCompound(query_string.c_str());
 
     try {
         PlQuery q("queryt_create", av);
-//        PlQuery q("queryt_create", PlCompound(query_string.c_str()));
-//        PlQuery q("queryt_create", PlTermv(PlCompound(input.c_str())));
-//        q.next_solution();
-//        PlCall ("cpl_proof_of_concept", argv);
 
-        while (q.next_solution()) {
-            char* solution = av[1];
-            thread_id.assign(solution);
-//            std::cout << (char*) av[1] << std::endl;
-        }
-
-
+        while (q.next_solution())
+            thread_id.assign(av[1]);
     }
     catch (PlException &ex) {
         ROS_INFO((char *) ex);
     }
-    ROS_INFO(thread_id.c_str());
+    return thread_id;
 }
-
-//    {
-//        PlFrame fr;
-//        PlTermv av(2);
-//        av[0] = PlCompound("john");
-//        PlQuery q("likes", av);
-//        while (q.next_solution())
-//        {
-//            cout << (char*)av[1] << endl;
-//        }
-//    }
 
 void PrologInterface::push_query(int mode, std::string id, std::string query) {
 
@@ -187,6 +167,32 @@ void PrologInterface::init() {
 //    }
 }
 
+void has_next_solution(std::shared_ptr <PlEngine> engine, std::string thread_id) {
+
+    std::string solution;
+//    PlFrame fr;
+    PlTermv av(2);
+    av[0] = thread_id.c_str(); //PlCompound(thread_id.c_str());
+
+//    PlTerm av(PlCompound(thread_id.c_str()));
+
+    try {
+        std::cout << "Got into the try block." << std::endl;
+        PlQuery q("queryt_has_next", av);
+
+//        while () {
+//            std::cout << "Got into the while loop -- so there is at least one solution." << std::endl;
+            std::cout << (char *) av[1] << std::endl;
+            solution.assign(av[1]);
+//        }
+    }
+    catch (PlException &ex) {
+        ROS_INFO((char *) ex);
+    }
+    ROS_INFO(solution.c_str());
+
+}
+
 void PrologInterface::loop() {
 
     ROS_INFO("Invoking prolog engine");
@@ -204,26 +210,54 @@ void PrologInterface::loop() {
     init();
 
     std::unordered_map<std::string, PrologQuery>::iterator iterator;
-    int counter = 0;
     std::string debug_msg = "";
     while (ros::ok()) {
         {
             std::unique_lock <std::mutex> lk(loop_lock);
             // queries available?
             while (!queries.empty()) {
-                counter++;
-                debug_msg = "ENTER WHILE LOOP: " + std::to_string(counter);
+//                debug_msg = "ENTER WHILE LOOP: " + std::to_string(counter);
 
                 iterator = queries.begin();
                 std::string query_string(iterator->second.get_query());
 
                 ROS_INFO(query_string.c_str());
                 // take first query from list, get value (the query) and get the query string
-                pl_threaded_call(engine, query_string);
+                std::string thread_id = pl_threaded_call(engine, query_string);
+
+                ROS_INFO(thread_id.c_str());
+//                if (has_next_solution(engine, thread_id)) {
+//                    std::cout << "true" << std::endl;
+//                }
+
+                has_next_solution(engine, thread_id);
+//                thread_id += + ", Next";
+//                std::string solution;
+//                PlFrame fr;
+//                PlTermv av(2);
+//                av[0] = PlCompound(thread_id.c_str());
+//
+//
+//
+//                try {
+//                    std::cout << "Got into the try block." << std::endl;
+//                    PlCall ("queryt_next_solution", av);
+////                    PlQuery q("queryt_next_solution", av);
+//
+//                    while (plt_has_next(thread_id)) {
+//                        std::cout << "Got into the while loop -- so there is at least one solution." << std::endl;
+//                        std::cout << (char *) av[1] << std::endl;
+//                        solution.assign(av[1]);
+//                    }
+//                }
+//                catch (PlException &ex) {
+//                    ROS_INFO((char *) ex);
+//                }
+//
+//                ROS_INFO(solution.c_str());
 
                 push_lock.lock();
-                processed_queries.insert({iterator->first,
-                                          iterator->second}); // synchronized push of the query to the shared map of processed queries
+                processed_queries.insert({iterator->first, iterator->second});
                 queries.erase(iterator); // remove query from the queued queries
                 push_lock.unlock();
 

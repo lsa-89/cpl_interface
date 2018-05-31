@@ -64,6 +64,11 @@ public:
      */
     void loop();
 
+//    /*
+//     * returns true if a given pl_thread_id has a next solution to offer
+//     */
+//    bool has_next_solution(std::string);
+
     /*
      * push a query to the map of queries
      */
