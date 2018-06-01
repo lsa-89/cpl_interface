@@ -11,7 +11,7 @@
 #include <mutex>
 #include <condition_variable>
 
-// data structure to keep track of all incoming queries, we use unorderd_map for cheaper inserts/accesses
+// data structure to keep track of all incoming queries, we use unordered_map for cheaper inserts/accesses
 // map: considers ordering, O(log n) for insert/access
 // unordered_map: no ordering, O(1) for insert/access
 std::unordered_map <std::string, PrologQuery> queries; // shared set of queries
@@ -39,7 +39,7 @@ bool query(json_prolog_msgs::PrologQuery::Request &req,
         std::string id = req.id;
         std::string query_string = req.query;
 
-        plIfaceGlobal->PrologInterface::push_query(mode, id, query_string);
+        plIfaceGlobal->PrologInterface::push_query(mode, id, query_string, false);
 
         res.ok = true; //query.get_ok();
         res.message = ""; //query.get_message();
@@ -59,21 +59,65 @@ bool finish(json_prolog_msgs::PrologFinish::Request &req,
 bool next_solution(json_prolog_msgs::PrologNextSolution::Request &req,
                    json_prolog_msgs::PrologNextSolution::Response &res) {
 
+    /*
+     * no id entered?
+     */
     if (req.id == "") {
-        res.status = 1;
+        res.status = 1; // 1 = wrong id
         res.solution = "";
         return true;
     }
 
+    /*
+     * no query for id?
+     */
+    std::unordered_map<std::string, PrologQuery>::iterator iterator;
+    iterator = processed_queries.find(req.id);
+
+    if (iterator == processed_queries.end()) {
+        res.status = 1; // 1 = wrong id
+        res.solution = ""; // should the solution be empty if the wrong ID is used?
+        return true;
+    }
+
+    /*
+     * id seems to be fine, get the next solution
+     */
     PrologQuery query = plIfaceGlobal->PrologInterface::pop_query(req.id);
 
-//    if (query == NULL) {
-//        res.byte = 2;
+    plIfaceGlobal->PrologInterface::push_query(query.get_mode(), query.get_id(), query.get_query(), true);
+
+    std::string thread_id = query.get_pl_thread_id();
+
+    std::cout << "The ID of the pl thread is: " + thread_id << std::endl;
+
+//    std::string next_solution;
+//    bool has_next_solution = has_next_solution();
+//
+//    if (has_next_solution) {
+//        next_solution = get_next_solution(thread_id);
+//    }
+
+    /*
+     * there is no next solution anymore
+     */
+//    else {
+//        res.status = 0; // 0 = no solution
 //        res.solution = "";
 //        return true;
 //    }
 
-    res.status = 3;
+    // hole alte query raus aus proc.queries
+
+    //push geupdatete query wieder zu queries -> wakeup vom worker thread
+
+
+
+//        next speichern
+//        next returnen
+
+
+    res.status = 3; // 3 = ok
     res.solution = "";
     return true;
 }
@@ -119,13 +163,20 @@ std::string pl_threaded_call(std::shared_ptr <PlEngine> engine, std::string inpu
     return thread_id;
 }
 
-void PrologInterface::push_query(int mode, std::string id, std::string query) {
+void PrologInterface::push_query(int mode, std::string id, std::string query, bool request_next_solution) {
 
     // build a query from the requirements
     PrologQuery queryObj;
-    std::string query_string = query;
+//    std::string query_string = query;
     // set_values(mode, id, query, msg, ok)
-    queryObj.set_values(mode, id, query_string, "", true);
+    queryObj.set_mode(mode);
+    queryObj.set_id(id);
+    queryObj.set_pl_thread_id("");
+    queryObj.set_query(query);
+    queryObj.set_message("");
+    queryObj.set_solution("");
+    queryObj.set_ok(true);
+    queryObj.set_request_next_solution(request_next_solution);
 
     push_lock.lock();
     queries.insert({id, queryObj}); // synchronized push of the query to the shared map of queries
@@ -138,8 +189,32 @@ void PrologInterface::push_query(int mode, std::string id, std::string query) {
 
 PrologQuery PrologInterface::pop_query(std::string id) {
 
-    PrologQuery popped_query = processed_queries[id];
+    std::unordered_map<std::string, PrologQuery>::iterator iterator;
+    PrologQuery popped_query;
 
+    /*
+     * check processed_queries for a matching instance
+     */
+    iterator = processed_queries.find(id);
+    if (!(iterator == processed_queries.end())) {
+        push_lock.lock();
+        popped_query = processed_queries[id];
+        processed_queries.erase(iterator);
+        push_lock.unlock();
+    }
+    /*
+     * maybe the matching query hasn't been transferred to processing_queries yet,
+     * so we check the unprocessed queries as well
+     */
+    else {
+        iterator = queries.find(id);
+        if (!(iterator == queries.end())) {
+            push_lock.lock();
+            popped_query = queries[id];
+            queries.erase(iterator);
+            push_lock.unlock();
+        }
+    }
     return popped_query;
 }
 
@@ -167,10 +242,14 @@ void PrologInterface::init() {
 //    }
 }
 
-void has_next_solution(std::shared_ptr <PlEngine> engine, std::string thread_id) {
+std::string pl_next_solution(std::shared_ptr <PlEngine> engine, std::string thread_id) {
 
-    std::string solution;
-//    PlFrame fr;
+
+    // Check if more solutions are available
+    std::string next_solution;
+
+    std::cout << "IT'S SOMETHING" << std::endl;
+    PlFrame fr;
     PlTermv av(2);
     av[0] = thread_id.c_str(); //PlCompound(thread_id.c_str());
 
@@ -178,19 +257,20 @@ void has_next_solution(std::shared_ptr <PlEngine> engine, std::string thread_id)
 
     try {
         std::cout << "Got into the try block." << std::endl;
-        PlQuery q("queryt_has_next", av);
+        PlQuery q("queryt_next_solution", av);
 
 //        while () {
 //            std::cout << "Got into the while loop -- so there is at least one solution." << std::endl;
-            std::cout << (char *) av[1] << std::endl;
-            solution.assign(av[1]);
+        std::cout << (char *) av[1] << std::endl;
+        next_solution.assign(av[1]);
 //        }
     }
     catch (PlException &ex) {
         ROS_INFO((char *) ex);
     }
-    ROS_INFO(solution.c_str());
 
+    ROS_INFO(next_solution.c_str());
+    return next_solution;
 }
 
 void PrologInterface::loop() {
@@ -221,16 +301,27 @@ void PrologInterface::loop() {
                 iterator = queries.begin();
                 std::string query_string(iterator->second.get_query());
 
-                ROS_INFO(query_string.c_str());
-                // take first query from list, get value (the query) and get the query string
-                std::string thread_id = pl_threaded_call(engine, query_string);
+                if (iterator->second.get_request_next_solution()) {
+                    std::string rosinfo = "Received query: " + query_string;
+                    ROS_INFO(rosinfo.c_str());
+                    std::string thread_id = pl_threaded_call(engine, query_string);
+                    push_lock.lock();
+                    iterator->second.set_pl_thread_id(thread_id);
+                    push_lock.unlock();
+                    ROS_INFO(thread_id.c_str());
+                }
+                else {
+                    std::string thread_id = iterator->second.get_pl_thread_id();
+                    pl_next_solution(engine, thread_id);
+                }
 
-                ROS_INFO(thread_id.c_str());
+
+//                ROS_INFO(thread_id.c_str());
 //                if (has_next_solution(engine, thread_id)) {
 //                    std::cout << "true" << std::endl;
 //                }
 
-                has_next_solution(engine, thread_id);
+
 //                thread_id += + ", Next";
 //                std::string solution;
 //                PlFrame fr;
@@ -272,15 +363,6 @@ void PrologInterface::loop() {
 
 PrologInterface::PrologInterface() :
         thread(&PrologInterface::loop, this) {
-}
-
-void PrologQuery::set_values(int p_mode, const std::string &p_id,
-                             const std::string &p_query, const std::string &p_message, bool p_ok) {
-    mode = p_mode;
-    id = p_id;
-    query = p_query;
-    message = p_message;
-    ok = p_ok;
 }
 
 int main(int argc, char **argv) {
