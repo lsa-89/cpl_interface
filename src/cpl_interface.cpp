@@ -29,12 +29,11 @@ bool query(json_prolog_msgs::PrologQuery::Request &req,
            json_prolog_msgs::PrologQuery::Response &res) {
 
     // case id already exists in queries
-    if (queries.count(req.id) > 0) {
+    if (queries.count(req.id) > 0 || processed_queries.count(req.id) > 0) {
         res.ok = false;
-        res.message = "Another query is already being processed with id" + req.id;
+        res.message = "Another query is already being processed with id " + req.id;
+        return true;
     } else {
-
-
         int mode = req.mode;
         std::string id = req.id;
         std::string query_string = req.query;
@@ -148,6 +147,8 @@ std::string pl_threaded_call(std::shared_ptr <PlEngine> engine, std::string inpu
     PlFrame fr;
     PlTermv av(2);
     av[0] = input.c_str(); //PlString(query_string.c_str());
+    //PLTerm foo;
+    //av[1] = foo;
 //    av[1] = "Id";
 //    av[0] = PlCompound(query_string.c_str());
 
@@ -202,10 +203,10 @@ PrologQuery PrologInterface::pop_query(std::string id) {
         processed_queries.erase(iterator);
         push_lock.unlock();
     }
-    /*
-     * maybe the matching query hasn't been transferred to processing_queries yet,
-     * so we check the unprocessed queries as well
-     */
+        /*
+         * maybe the matching query hasn't been transferred to processing_queries yet,
+         * so we check the unprocessed queries as well
+         */
     else {
         iterator = queries.find(id);
         if (!(iterator == queries.end())) {
@@ -227,19 +228,6 @@ void PrologInterface::init() {
     catch (PlException &ex) {
         ROS_INFO((char *) ex);
     }
-
-//    PlTermv out(4); // Diese Zeile wirft seg fault wird aber im example auch so verwendet
-//    out[0] = "thread_create";
-//    out[1] = "write(1)";
-//    out[2] = "Id";
-//    out[3] = "[]";
-//
-//    try {
-//        PlQuery q("call", out);
-//    }
-//    catch (PlException &ex) {
-//        ROS_INFO((char *) ex);
-//    }
 }
 
 std::string pl_next_solution(std::shared_ptr <PlEngine> engine, std::string thread_id) {
@@ -248,7 +236,7 @@ std::string pl_next_solution(std::shared_ptr <PlEngine> engine, std::string thre
     // Check if more solutions are available
     std::string next_solution;
 
-    std::cout << "IT'S SOMETHING" << std::endl;
+    std::cout << "pl_next_solution reached" << std::endl;
     PlFrame fr;
     PlTermv av(2);
     av[0] = thread_id.c_str(); //PlCompound(thread_id.c_str());
@@ -256,13 +244,49 @@ std::string pl_next_solution(std::shared_ptr <PlEngine> engine, std::string thre
 //    PlTerm av(PlCompound(thread_id.c_str()));
 
     try {
-        std::cout << "Got into the try block." << std::endl;
+        std::cout << "PL_Thread_ID for next solution: " << (char *) av[0] << std::endl;
         PlQuery q("queryt_next_solution", av);
+        while (q.next_solution()) {
+            //PlTail solution_list(av[1]);
+            //json_parse_list(solution_list, json_object);
+            //print_json_object(json_object);
+            // {
+            //   'A': JSON_LIST([1,2,3]
+            //   'B': ....
+            // }
 
 //        while () {
 //            std::cout << "Got into the while loop -- so there is at least one solution." << std::endl;
-        std::cout << (char *) av[1] << std::endl;
-        next_solution.assign(av[1]);
+
+            std::cout << "foo1: " << std::endl;  // 'A'
+            std::cout << "foo1: " << (char *) av[1] << std::endl;  // 'A'
+            PlTail solution_list(av[1]);
+            std::cout << "foo2: " << std::endl;  // 'A'
+            PlTerm assignment_term;
+            solution_list.next(assignment_term);
+            std::cout << "foo3: " << (char *) assignment_term << std::endl;  // 'A'
+            solution_list.close();
+
+            PlTail assignment(assignment_term);
+            PlTerm name_term, value_term;
+            assignment.next(name_term);
+            std::cout << "term0: " << (char *) name_term << std::endl;  // 'A'
+            assignment.next(value_term);
+            std::cout << "term1: " << (char *) value_term << std::endl; // [1,2,3]
+
+            PlTail test_value_list(value_term);
+            PlTerm list_value_term;
+            test_value_list.next(list_value_term);
+            std::cout << "term1.1: " << (char *) test_value_list << std::endl;  // 'A'
+            std::cout << "term1.2: " << (char *) list_value_term << std::endl;  // 'A'
+
+            assignment.close();
+
+            //std::cout << (char *) av[1] << std::endl;
+            // next_solution.assign(av[1]);
+        }
+        std::cout << "DONE: " << std::endl;  // 'A'
+
 //        }
     }
     catch (PlException &ex) {
@@ -296,24 +320,25 @@ void PrologInterface::loop() {
             std::unique_lock <std::mutex> lk(loop_lock);
             // queries available?
             while (!queries.empty()) {
-//                debug_msg = "ENTER WHILE LOOP: " + std::to_string(counter);
 
                 iterator = queries.begin();
                 std::string query_string(iterator->second.get_query());
 
-                if (iterator->second.get_request_next_solution()) {
-                    std::string rosinfo = "Received query: " + query_string;
-                    ROS_INFO(rosinfo.c_str());
-                    std::string thread_id = pl_threaded_call(engine, query_string);
-                    push_lock.lock();
-                    iterator->second.set_pl_thread_id(thread_id);
-                    push_lock.unlock();
-                    ROS_INFO(thread_id.c_str());
-                }
-                else {
-                    std::string thread_id = iterator->second.get_pl_thread_id();
-                    pl_next_solution(engine, thread_id);
-                }
+//                std::cout
+//                if (iterator->second.get_request_next_solution()) {
+                std::string rosinfo = "Received query: " + query_string;
+                ROS_INFO(rosinfo.c_str());
+                std::string thread_id = pl_threaded_call(engine, query_string);
+                push_lock.lock();
+                iterator->second.set_pl_thread_id(thread_id);
+                push_lock.unlock();
+                ROS_INFO(thread_id.c_str());
+                pl_next_solution(engine, thread_id);
+//                }
+//                else {
+//                    std::string thread_id = iterator->second.get_pl_thread_id();
+//                    pl_next_solution(engine, thread_id);
+//                }
 
 
 //                ROS_INFO(thread_id.c_str());
