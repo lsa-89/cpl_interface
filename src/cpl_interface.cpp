@@ -293,7 +293,7 @@ std::string pl_next_solution(std::shared_ptr <PlEngine> engine, std::string thre
             PlTerm list_value_term;
             test_value_list.next(list_value_term);
             std::cout << "term1.1: " << (char *) test_value_list << std::endl;  // 'A'
-            std::cout << "term1.2: " << (char *) list_value_term << std::endl;³³  // 'A'
+            std::cout << "term1.2: " << (char *) list_value_term << std::endl;  // 'A'
 
             assignment.close();
 
