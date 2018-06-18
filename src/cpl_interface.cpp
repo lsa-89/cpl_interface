@@ -6,29 +6,32 @@
 #include "ros/package.h"
 #include "time.h"
 #include <thread>
-#include <vector>
+//#include <vector>
 #include <unordered_map>
 #include <mutex>
 #include <condition_variable>
 
-// data structure to keep track of all incoming queries, we use unordered_map for cheaper inserts/accesses
-// map: considers ordering, O(log n) for insert/access
-// unordered_map: no ordering, O(1) for insert/access
-std::unordered_map <std::string, PrologQuery> queries; // shared set of queries
+/*
+ * the data structure of our choice are unordered maps to keep track of (a) incoming queries and
+ * (b) queries that are already being processed but need to be kept alive to generate further solutions
+ */
+std::unordered_map <std::string, PrologQuery> queries;
 std::unordered_map <std::string, PrologQuery> processed_queries;
 
-//std::condition_variable cv_loop;
-
-// shared mutex, used by query threads
+// shared mutex, used by threads from the callback fctn
 std::mutex push_lock;
 
-// global access to the prolog interface instance
+// global reference to the prolog interface instance
 PrologInterface *plIfaceGlobal = NULL;
 
+/*
+ * Create a query from the given query string and push it to the list of queries, where it will be handled by the
+ * worker loop.
+ */
 bool query(json_prolog_msgs::PrologQuery::Request &req,
            json_prolog_msgs::PrologQuery::Response &res) {
 
-    // case id already exists in queries
+    // id already exists in queries
     if (queries.count(req.id) > 0 || processed_queries.count(req.id) > 0) {
         res.ok = false;
         res.message = "Another query is already being processed with id " + req.id;
@@ -40,13 +43,16 @@ bool query(json_prolog_msgs::PrologQuery::Request &req,
 
         plIfaceGlobal->PrologInterface::push_query(mode, id, query_string, false);
 
-        res.ok = true; //query.get_ok();
-        res.message = ""; //query.get_message();
+        res.ok = true;
+        res.message = "";
 
         return true;
     }
 }
 
+/*
+ * Destroy a query if it is no longer needed. This is the case if no further solutions need to be generated for that query.
+ */
 bool finish(json_prolog_msgs::PrologFinish::Request &req,
             json_prolog_msgs::PrologFinish::Response &res) {
     //res.sum = req.a + req.b;
@@ -55,6 +61,9 @@ bool finish(json_prolog_msgs::PrologFinish::Request &req,
     return true;
 }
 
+/*
+ * Calculate a next solution for a query that has been invoked beforehand by the callback function query.
+ */
 bool next_solution(json_prolog_msgs::PrologNextSolution::Request &req,
                    json_prolog_msgs::PrologNextSolution::Response &res) {
 
@@ -75,21 +84,23 @@ bool next_solution(json_prolog_msgs::PrologNextSolution::Request &req,
 
     if (iterator == processed_queries.end()) {
         res.status = 1; // 1 = wrong id
-        res.solution = ""; // should the solution be empty if the wrong ID is used?
+        res.solution = "";
         return true;
     }
 
     /*
      * id seems to be fine, get the next solution
      */
-    PrologQuery query = plIfaceGlobal->PrologInterface::pop_query(req.id);
+    PrologQuery query = plIfaceGlobal->PrologInterface::pop_query(req.id); // pop the already existing query
+    plIfaceGlobal->PrologInterface::push_query(query.get_mode(), query.get_id(), query.get_query(),
+                                               true); // push back the updated query
 
-    plIfaceGlobal->PrologInterface::push_query(query.get_mode(), query.get_id(), query.get_query(), true);
+    // debug print
+    std::cout << "The ID of the pl thread is: " + query.get_pl_thread_id() << std::endl;
 
-    std::string thread_id = query.get_pl_thread_id();
-
-    std::cout << "The ID of the pl thread is: " + thread_id << std::endl;
-
+    /*
+     * this needs to be done after the query has been picked from the worker loop
+     */
 //    std::string next_solution;
 //    bool has_next_solution = has_next_solution();
 //
@@ -97,24 +108,11 @@ bool next_solution(json_prolog_msgs::PrologNextSolution::Request &req,
 //        next_solution = get_next_solution(thread_id);
 //    }
 
-    /*
-     * there is no next solution anymore
-     */
 //    else {
 //        res.status = 0; // 0 = no solution
 //        res.solution = "";
 //        return true;
 //    }
-
-    // hole alte query raus aus proc.queries
-
-    //push geupdatete query wieder zu queries -> wakeup vom worker thread
-
-
-
-//        next speichern
-//        next returnen
-
 
     res.status = 3; // 3 = ok
     res.solution = "";
@@ -123,26 +121,18 @@ bool next_solution(json_prolog_msgs::PrologNextSolution::Request &req,
 
 /*
  * Make a call to prolog that is started in a new prolog thread, using
- * the threaded_query.pl interface
+ * the threaded_query.pl interface. The prolog thread remains until it is closed properly and can be referenced by its ID.
+ *
+ * @param input: a string that contains the query that is executed by the prolog engine.
+ * @param engine: the prolog engine that is handling everything related to prolog.
  */
 std::string pl_threaded_call(std::shared_ptr <PlEngine> engine, std::string input) {
 
     /*
-     * Builds up the query for prolog. The following example should form
-     * a prolog query of the form
+     * The prolog term, the prolog engine will try to unify,
+     * av[1] yields the solution to the imposed query
      *
-     * call(thread_create, write(1), Id, []).
-     */
-
-    std::string query_string = input;// + ", Id";
-    std::string thread_id;
-
-    /*
-     * This is the prolog term that the prolog engine will try to unify.
-     * av[1] will yield the solution to the imposed query.
-     *
-     * The query that's being send to prolog, in this case, will look like this:
-     * queryt_create('<input>', Id).
+     * These queries usually look like this: "queryt_create('<input>', Id)."
      */
     PlFrame fr;
     PlTermv av(2);
@@ -151,6 +141,8 @@ std::string pl_threaded_call(std::shared_ptr <PlEngine> engine, std::string inpu
     //av[1] = foo;
 //    av[1] = "Id";
 //    av[0] = PlCompound(query_string.c_str());
+
+    std::string thread_id;
 
     try {
         PlQuery q("queryt_create", av);
@@ -164,12 +156,16 @@ std::string pl_threaded_call(std::shared_ptr <PlEngine> engine, std::string inpu
     return thread_id;
 }
 
+/*
+ * Take all the information needed for a query and create a query object.
+ * Push it to the map of queries, so that the worker loop will eventually pass the query to the prolog engine.
+ *
+ * The push is synchronized in order to prevent undefined behaviour from the different threads.
+ */
 void PrologInterface::push_query(int mode, std::string id, std::string query, bool request_next_solution) {
 
     // build a query from the requirements
     PrologQuery queryObj;
-//    std::string query_string = query;
-    // set_values(mode, id, query, msg, ok)
     queryObj.set_mode(mode);
     queryObj.set_id(id);
     queryObj.set_pl_thread_id("");
@@ -177,7 +173,8 @@ void PrologInterface::push_query(int mode, std::string id, std::string query, bo
     queryObj.set_message("");
     queryObj.set_solution("");
     queryObj.set_ok(true);
-    queryObj.set_request_next_solution(request_next_solution);
+    queryObj.set_request_next_solution(
+            request_next_solution); // this is important bc that's how the program knows a next solution is requested
 
     push_lock.lock();
     queries.insert({id, queryObj}); // synchronized push of the query to the shared map of queries
@@ -188,6 +185,13 @@ void PrologInterface::push_query(int mode, std::string id, std::string query, bo
     ROS_INFO("PUSH QUERY PASSED");
 }
 
+/*
+ * Pops a query from either the map for processed or unprocessed queries.
+ * This is needed when a next solution for an imposed query is requested. The query object is then popped (mostly from processed queries)
+ * modified and pushed back to queries, where the worker loop will reprocess the object eventually.
+ *
+ * Popping is also synchronized to prevent changes to a query while it is transfered from unprocessed queries to queries.
+ */
 PrologQuery PrologInterface::pop_query(std::string id) {
 
     std::unordered_map<std::string, PrologQuery>::iterator iterator;
@@ -219,6 +223,9 @@ PrologQuery PrologInterface::pop_query(std::string id) {
     return popped_query;
 }
 
+/*
+ * Initialize the knowrob_common package, so that all the prolog predicates are available.
+ */
 void PrologInterface::init() {
 
     PlTerm av("knowrob_common");
@@ -230,6 +237,11 @@ void PrologInterface::init() {
     }
 }
 
+/*
+ * Calculate the next solution to an imposed query.
+ *
+ * @status: under construction.
+ */
 std::string pl_next_solution(std::shared_ptr <PlEngine> engine, std::string thread_id) {
 
 
@@ -246,7 +258,12 @@ std::string pl_next_solution(std::shared_ptr <PlEngine> engine, std::string thre
     try {
         std::cout << "PL_Thread_ID for next solution: " << (char *) av[0] << std::endl;
         PlQuery q("queryt_next_solution", av);
-        while (q.next_solution()) {
+
+        if (!(q.next_solution())) {
+            return "";
+        } else {
+
+
             //PlTail solution_list(av[1]);
             //json_parse_list(solution_list, json_object);
             //print_json_object(json_object);
@@ -255,8 +272,6 @@ std::string pl_next_solution(std::shared_ptr <PlEngine> engine, std::string thre
             //   'B': ....
             // }
 
-//        while () {
-//            std::cout << "Got into the while loop -- so there is at least one solution." << std::endl;
 
             std::cout << "foo1: " << std::endl;  // 'A'
             std::cout << "foo1: " << (char *) av[1] << std::endl;  // 'A'
@@ -278,16 +293,14 @@ std::string pl_next_solution(std::shared_ptr <PlEngine> engine, std::string thre
             PlTerm list_value_term;
             test_value_list.next(list_value_term);
             std::cout << "term1.1: " << (char *) test_value_list << std::endl;  // 'A'
-            std::cout << "term1.2: " << (char *) list_value_term << std::endl;  // 'A'
+            std::cout << "term1.2: " << (char *) list_value_term << std::endl;³³  // 'A'
 
             assignment.close();
 
             //std::cout << (char *) av[1] << std::endl;
             // next_solution.assign(av[1]);
         }
-        std::cout << "DONE: " << std::endl;  // 'A'
-
-//        }
+        std::cout << "DONE: " << std::endl;
     }
     catch (PlException &ex) {
         ROS_INFO((char *) ex);
@@ -297,12 +310,49 @@ std::string pl_next_solution(std::shared_ptr <PlEngine> engine, std::string thre
     return next_solution;
 }
 
+/*
+ * Check if there are further solutions for a given query. Reference via prolog thread id.
+ */
+bool pl_has_next_solution(std::shared_ptr <PlEngine> engine, std::string thread_id) {
+
+    bool has_next = false;
+
+    std::cout << "pl_has_next_solution reached" << std::endl;
+    PlFrame fr;
+    PlTermv av(2);
+    av[0] = thread_id.c_str(); //PlCompound(thread_id.c_str());
+
+//    PlTerm av(PlCompound(thread_id.c_str()));
+
+    try {
+        std::cout << "av[1] in pl_has_next_solution: " << (char *) av[1] << std::endl;
+        PlQuery q("queryt_has_next", av);
+
+        std::cout << q.next_solution() << std::endl;
+//        while (q.next_solution()) {
+//        }
+
+        // next_solution.assign(av[1]);
+    }
+
+    catch (PlException &ex) {
+        ROS_INFO((char *) ex);
+    }
+    return has_next;
+}
+
+/*
+ * A worker thread that is notified when there are queries available.
+ * Process all the queries available in queries and goes back to sleep until it is notified again.
+ *
+ * @bug: cannot be killed using ctrl+c, use pkill instead
+ */
 void PrologInterface::loop() {
 
     ROS_INFO("Invoking prolog engine");
     char *argv[4];
     int argc = 0;
-    argv[argc++] = (char *) "PrologEngine"; // cast only to solve warnings from the compiler
+    argv[argc++] = (char *) "PrologEngine";
     argv[argc++] = (char *) "-f";
     std::string rosPrologInit = ros::package::getPath("rosprolog") + "/prolog/init.pl";
     argv[argc] = new char[rosPrologInit.size() + 1];
@@ -318,59 +368,38 @@ void PrologInterface::loop() {
     while (ros::ok()) {
         {
             std::unique_lock <std::mutex> lk(loop_lock);
-            // queries available?
-            while (!queries.empty()) {
+            while (!queries.empty()) { // queries available?
 
                 iterator = queries.begin();
                 std::string query_string(iterator->second.get_query());
 
-//                std::cout
-//                if (iterator->second.get_request_next_solution()) {
-                std::string rosinfo = "Received query: " + query_string;
-                ROS_INFO(rosinfo.c_str());
-                std::string thread_id = pl_threaded_call(engine, query_string);
-                push_lock.lock();
-                iterator->second.set_pl_thread_id(thread_id);
-                push_lock.unlock();
-                ROS_INFO(thread_id.c_str());
-                pl_next_solution(engine, thread_id);
-//                }
-//                else {
-//                    std::string thread_id = iterator->second.get_pl_thread_id();
-//                    pl_next_solution(engine, thread_id);
-//                }
+                /*
+                 *  is the current query new (not a next solution request for an imposed query)?
+                 */
+                if (!(iterator->second.get_request_next_solution())) {
 
+                    std::string rosinfo = "Received query: " + query_string;
+                    ROS_INFO(rosinfo.c_str());
+                    std::string thread_id = pl_threaded_call(engine, query_string);
+                    push_lock.lock();
+                    iterator->second.set_pl_thread_id(thread_id);
+                    push_lock.unlock();
+                    ROS_INFO(thread_id.c_str());
+                }
+                    /*
+                     * is the current query a next solution request for an imposed query?
+                     */
+                else {
+                    std::string thread_id = iterator->second.get_pl_thread_id();
 
-//                ROS_INFO(thread_id.c_str());
-//                if (has_next_solution(engine, thread_id)) {
-//                    std::cout << "true" << std::endl;
-//                }
-
-
-//                thread_id += + ", Next";
-//                std::string solution;
-//                PlFrame fr;
-//                PlTermv av(2);
-//                av[0] = PlCompound(thread_id.c_str());
-//
-//
-//
-//                try {
-//                    std::cout << "Got into the try block." << std::endl;
-//                    PlCall ("queryt_next_solution", av);
-////                    PlQuery q("queryt_next_solution", av);
-//
-//                    while (plt_has_next(thread_id)) {
-//                        std::cout << "Got into the while loop -- so there is at least one solution." << std::endl;
-//                        std::cout << (char *) av[1] << std::endl;
-//                        solution.assign(av[1]);
-//                    }
-//                }
-//                catch (PlException &ex) {
-//                    ROS_INFO((char *) ex);
-//                }
-//
-//                ROS_INFO(solution.c_str());
+                    // are there any more solutions for this query?
+                    ROS_INFO(thread_id.c_str());
+                    if (!(pl_has_next_solution(engine, thread_id))) {
+                        std::cout << "There are no more solutions for this query." << std::endl;
+                    } else {
+                        pl_next_solution(engine, thread_id);
+                    }
+                }
 
                 push_lock.lock();
                 processed_queries.insert({iterator->first, iterator->second});
@@ -390,6 +419,9 @@ PrologInterface::PrologInterface() :
         thread(&PrologInterface::loop, this) {
 }
 
+/*
+ * Manage the ros functions and create the prolog interface.
+ */
 int main(int argc, char **argv) {
     ros::init(argc, argv, "cpl_interface_node");
     ros::NodeHandle n;
